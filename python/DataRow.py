@@ -470,7 +470,7 @@ class DataRow:
 
         return d
 
-    def show(self, r=2, color=255, other=None, title=None):
+    def drawLandmarks(self, r=2, color=255, other=None, title=None):
         M = self.image
         if hasattr(self, 'prediction'):
             for x,y in self.prediction.reshape(-1,2):
@@ -483,7 +483,10 @@ class DataRow:
         cv2.circle(M, (int(self.middle[0]), int(self.middle[1])), r, color, -1)
         if hasattr(self, 'fbbox'):
             cv2.rectangle(M, self.fbbox.top_left(), self.fbbox.bottom_right(), color)
+        return M
 
+    def show(self, r=2, color=255, other=None, title=None):
+        M = self.drawLandmarks(r, color, other, title)
         if title is None:
             title = self.name
         cv2.imshow(title, M)
