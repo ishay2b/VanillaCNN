@@ -1,6 +1,5 @@
 
 import numpy as np
-from mercurial.templater import if_
 _A = np.array  # A shortcut to creating arrays in command line 
 import os
 import cv2
@@ -53,6 +52,7 @@ AFLW_STEPS=['downloadALFW',
             'testSetHD5', 
             'testSetPickle', 
             'trainSetHD5', 
+            'calcTrainSetMean', # depends on trainSetHD5
             'createAFLW_TestSet', 
             'testAFLW_TestSet', 
             'testErrorMini'] # Steps needed for AFLW
@@ -150,6 +150,34 @@ if 'trainSetHD5' in STEPS:
     writeHD5(dataRowsTrainValid, ROOT+'/caffeData/hd5/train.hd5', ROOT+'/caffeData/train.txt', MEAN_TRAIN_SET, STD_TRAIN_SET ,mirror=True)
     print "Finished writing train to caffeData/train.txt"
     
+
+#%% Calculate train mean image - Assume data was read to dataRowsTrainValid
+if 'calcTrainSetMean' in STEPS:
+    print ('Calculating train data mean value')
+    meanTrainSet = np.zeros([40,40,3], dtype='double')
+    for dataRow in dataRowsTrainValid:
+        meanTrainSet += dataRow.copyCroppedByBBox(dataRow.fbbox).image.astype('double')
+    
+    meanTrainSet /= len(dataRowsTrainValid)
+    cv2.imwrite(os.path.join(ROOT, 'trainMean.png'), (meanTrainSet).astype('uint8'))
+    print ('Finished Calculating train data mean value to file trainMean.png', meanTrainSet.mean())
+
+    print ('Calculating train data std value')
+
+    stdTrainSet = np.zeros([40,40,3], dtype='double')
+    for dataRow in dataRowsTrainValid:
+        diff = dataRow.copyCroppedByBBox(dataRow.fbbox).image.astype('double') - meanTrainSet
+        stdTrainSet += diff*diff
+        
+    stdTrainSet /= len(dataRowsTrainValid)
+    stdTrainSet = stdTrainSet**0.5
+    cv2.imwrite(os.path.join(ROOT, 'trainSTD.png'), (stdTrainSet).astype('uint8'))
+    print 'Finished Calculating train data std value to file std.png with mean', stdTrainSet.mean()
+
+    STD_TRAIN_SET  = cv2.imread(os.path.join(ROOT, 'trainSTD.png')).astype('f4') # Reread std
+else:
+    STD_TRAIN_SET  = cv2.imread(os.path.join(ROOT, 'trainSTD.png')).astype('f4')
+
 
 # Run the same caffe test set using python
 DEBUG = False  # Set this to true if you wish to plot the images
