@@ -38,9 +38,6 @@ AFW_MAT_PATH = os.path.join(ROOT, 'data', 'anno-v7.mat')
 PATH_TO_WEIGHTS  = os.path.join(ROOT, 'ZOO', 'vanillaCNN.caffemodel')
 PATH_TO_DEPLOY_TXT = os.path.join(ROOT, 'ZOO', 'vanilla_deploy.prototxt')
 
-MEAN_TRAIN_SET = cv2.imread(os.path.join(ROOT, 'trainMean.png')).astype('f4')
-STD_TRAIN_SET  = cv2.imread(os.path.join(ROOT, 'trainSTD.png')).astype('f4')
-
 detector=dlib.get_frontal_face_detector()
 
 ###########################    STEPS TO RUN       ####################
@@ -57,7 +54,7 @@ AFLW_STEPS=['downloadALFW',
             'testAFLW_TestSet', 
             'testErrorMini'] # Steps needed for AFLW
 
-STEPS =['createAFLW_TestSet'] # AFLW_STEPS+AFW_STEPS # Run AFLW and AFW steps
+STEPS =['trainSetHD5', 'calcTrainSetMean'] # AFLW_STEPS+AFW_STEPS # Run AFLW and AFW steps
 
 ##########################################    SCRIPT STEPS       ##################################################
 
@@ -158,24 +155,23 @@ if 'calcTrainSetMean' in STEPS:
     for dataRow in dataRowsTrainValid:
         meanTrainSet += dataRow.copyCroppedByBBox(dataRow.fbbox).image.astype('double')
     
-    meanTrainSet /= len(dataRowsTrainValid)
-    cv2.imwrite(os.path.join(ROOT, 'trainMean.png'), (meanTrainSet).astype('uint8'))
-    print ('Finished Calculating train data mean value to file trainMean.png', meanTrainSet.mean())
+    MEAN_TRAIN_SET = meanTrainSet / len(dataRowsTrainValid)
+    cv2.imwrite(os.path.join(ROOT, 'trainMean.png'), (MEAN_TRAIN_SET).astype('uint8'))
+    print ('Finished Calculating train data mean value to file trainMean.png', MEAN_TRAIN_SET.mean())
 
     print ('Calculating train data std value')
 
     stdTrainSet = np.zeros([40,40,3], dtype='double')
     for dataRow in dataRowsTrainValid:
-        diff = dataRow.copyCroppedByBBox(dataRow.fbbox).image.astype('double') - meanTrainSet
+        diff = dataRow.copyCroppedByBBox(dataRow.fbbox).image.astype('double') - MEAN_TRAIN_SET
         stdTrainSet += diff*diff
         
     stdTrainSet /= len(dataRowsTrainValid)
-    stdTrainSet = stdTrainSet**0.5
-    cv2.imwrite(os.path.join(ROOT, 'trainSTD.png'), (stdTrainSet).astype('uint8'))
-    print 'Finished Calculating train data std value to file std.png with mean', stdTrainSet.mean()
-
-    STD_TRAIN_SET  = cv2.imread(os.path.join(ROOT, 'trainSTD.png')).astype('f4') # Reread std
+    STD_TRAIN_SET = stdTrainSet**0.5
+    cv2.imwrite(os.path.join(ROOT, 'trainSTD.png'), (STD_TRAIN_SET).astype('uint8'))
+    print 'Finished Calculating train data std value to file trainSTD.png with mean', STD_TRAIN_SET.mean()
 else:
+    MEAN_TRAIN_SET = cv2.imread(os.path.join(ROOT, 'trainMean.png')).astype('f4')
     STD_TRAIN_SET  = cv2.imread(os.path.join(ROOT, 'trainSTD.png')).astype('f4')
 
 
