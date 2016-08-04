@@ -1,0 +1,74 @@
+name: "TweakFC"
+input: "ActivationAbs4"
+input_dim: 1
+input_dim: 64
+input_dim: 3
+input_dim: 3
+########################################
+
+layer {
+    name: "Dense1"
+    type: "InnerProduct"
+    bottom: "ActivationAbs4"
+    top: "Dense1"
+    param {
+        lr_mult: 1
+        decay_mult: 1
+    }
+    param {
+        lr_mult: 2
+        decay_mult: 0
+    }
+    inner_product_param {
+        num_output: 100
+        weight_filler {
+            type: "xavier"
+        }
+        bias_filler {
+            type: "constant"
+            value: 0
+        }
+    }
+}
+
+
+layer {
+  name: "ActivationTangH5"
+  bottom: "Dense1"
+  top: "ActivationTangH5"
+  type: "TanH"
+}
+
+layer {
+  name: "ActivationAbs5"
+  bottom: "ActivationTangH5"
+  top: "Abs5"
+  type: "AbsVal"
+}
+
+
+layer {
+    name: "Dense2"
+    type: "InnerProduct"
+    bottom: "Abs5"
+    top: "Dense2"
+    param {
+        lr_mult: 1
+        decay_mult: 1
+    }
+    param {
+        lr_mult: 2
+        decay_mult: 0
+    }
+    inner_product_param {
+        num_output: 10
+        weight_filler {
+            type: "xavier"
+        }
+        bias_filler {
+            type: "constant"
+            value: 0
+        }
+    }
+}
+
