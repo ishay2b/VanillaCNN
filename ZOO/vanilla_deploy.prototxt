@@ -216,7 +216,7 @@ layer {
 layer {
   name: "ActivationAbs4"
   bottom: "ActivationTangH4"
-  top: "Abs4"
+  top: "ActivationAbs4"
   type: "AbsVal"
 }
 
@@ -226,7 +226,7 @@ layer {
 layer {
     name: "Dense1"
     type: "InnerProduct"
-    bottom: "Abs4"
+    bottom: "ActivationAbs4"
     top: "Dense1"
     param {
         lr_mult: 1

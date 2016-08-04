@@ -1,4 +1,4 @@
-name: "vanila"
+name: "vanilla"
 
 layer {
    type: "HDF5Data"
