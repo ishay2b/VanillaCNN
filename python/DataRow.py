@@ -11,9 +11,7 @@ import numpy as np
 import sys
 import csv
 
-def getGitRepFolder():
-    import subprocess
-    return subprocess.Popen(['git', 'rev-parse', '--show-toplevel'], stdout=subprocess.PIPE).communicate()[0].rstrip()
+from helpers import *
 
 def mse_normlized(groundTruth, pred):
     delX = groundTruth[0]-groundTruth[2] 
@@ -90,7 +88,7 @@ def getValidWithBBox(dataRows):
             if det_bbox.left<0 or det_bbox.top<0 or det_bbox.right>dataRow.image.shape[0] or det_bbox.bottom>dataRow.image.shape[1]:
                 R.outsideLandmarks += 1  # Saftey check, make sure nothing goes out of bound.
             else:
-                validRow.append(dataRow)  
+                validRow.append(dataRow.copyCroppedByBBox(dataRow.fbbox))  
     
     
     return validRow,R 
@@ -207,17 +205,45 @@ class BBox:  # Bounding box
     def BBoxFromXYWH(x,y,w,h):
         return BBox(x,y, x+w, y+h)
     
-    def top_left(self):
-        return (self.top, self.left)
+    def top_left(self, dtype=None):
+        if dtype is None:
+            return (self.top, self.left)
+        elif dtype=='int':
+            return (int(self.top), int(self.left))
+        elif dtype=='float':
+            return (float(self.top), float(self.left))
+        else:
+            print "Error type requested, only int, float of None"
     
-    def left_top(self):
-        return (self.left, self.top)
+    def left_top(self, dtype=None):        
+        if dtype is None:
+            return (self.left, self.top)
+        elif dtype=='int':
+            return (int(self.left), int(self.top))
+        elif dtype=='float':
+            return (float(self.left), float(self.top))
+        else:
+            print "Error type requested, only int, float of None"
 
-    def bottom_right(self):
-        return (self.bottom, self.right)
+    def bottom_right(self, dtype=None):
+        if dtype is None:
+            return (self.bottom, self.right)
+        elif dtype=='int':
+            return (int(self.bottom), int(self.right))
+        elif dtype=='float':
+            return (float(self.bottom), float(self.right))
+        else:
+            print "Error type requested, only int, float of None"
     
-    def right_top(self):
-        return (self.right, self.top)
+    def right_top(self, dtype=None):
+        if dtype is None:
+            return (self.right, self.top)
+        elif dtype=='int':
+            return (int(self.right), int(self.top))
+        elif dtype=='float':
+            return (float(self.right), float(self.top))
+        else:
+            print "Error type requested, only int, float of None"
     
     def relaxed(self, clip ,relax=3):  #@Unused
         from numpy import array
@@ -482,7 +508,7 @@ class DataRow:
         cv2.circle(M, (int(self.rightMouth[0]), int(self.rightMouth[1])), r, color, -1)
         cv2.circle(M, (int(self.middle[0]), int(self.middle[1])), r, color, -1)
         if hasattr(self, 'fbbox'):
-            cv2.rectangle(M, self.fbbox.top_left(), self.fbbox.bottom_right(), color)
+            cv2.rectangle(M, self.fbbox.top_left(dtype='int'), self.fbbox.bottom_right(dtype='int'), color)
         return M
 
     def show(self, r=2, color=255, other=None, title=None):
@@ -501,11 +527,12 @@ class DataRow:
         self.rightMouth = (int(self.rightMouth[0]), int(self.rightMouth[1]))
         return self        
          
-    def copyCroppedByBBox(self,fbbox, siz=np.array([40.,40.])):
+    def copyCroppedByBBox(self,fbbox, siz=np.array([40,40])):
         """
         @ fbbox : BBox
         Returns a copy with cropped, scaled to size
         """        
+        
         fbbox.makeInt() # assume BBox class
         if fbbox.width()<10 or fbbox.height()<10:
             print "Invalid bbox size:",fbbox
@@ -513,13 +540,13 @@ class DataRow:
             
         faceOnly = self.image[fbbox.top : fbbox.bottom, fbbox.left:fbbox.right, :]
         scaled = DataRow() 
-        scaled.image = cv2.resize(faceOnly, (int(siz[0]), int(siz[1])))        
+        scaled.image = cv2.resize(faceOnly, (int(siz[0]), int(siz[1])))    
         scaled.setLandmarks(self.landmarks())        
         """ @scaled: DataRow """
         scaled.offsetCropped(fbbox.left_top()) # offset the landmarks
-        rx, ry = siz/faceOnly.shape[:2]
+        rx, ry = siz.astype('f4')/faceOnly.shape[:2]
         scaled.scale(rx, ry)
-        
+        scaled.fbbox=BBox.BBoxFromLTRB(0, 0, int(siz[0]), int(siz[1]))
         return scaled        
         
     def copyMirrored(self):
@@ -540,10 +567,10 @@ class DataRow:
         return ret
 
     @staticmethod
-    def dummyDataRow():
+    def dummyDataRow(index):
         ''' Returns a dummy dataRow object to play with
         '''
-        return DataRow('/Users/ishay/Dev/VanilaCNN/data/train/lfw_5590/Abbas_Kiarostami_0001.jpg',
+        return DataRow('/Users/ishay/VanilaCNN/data/train/lfw_5590/Abbas_Kiarostami_0001.jpg',
                      leftEye=(106.75, 108.25),
                      rightEye=(143.75,108.75) ,
                      middle = (131.25, 127.25),
@@ -569,6 +596,22 @@ class Predictor:
         self.net.blobs['data'].data[...] = cv2.split(resized)
         prediction = self.net.forward()['Dense2'][0]
         return prediction
+
+    def predictReturnFeatureVectorAsWell(self, resized):
+        """
+        @resized: image 40,40 already pre processed 
+        output: prediction, feature vector
+        """         
+        self.net.blobs['data'].data[...] = cv2.split(resized)
+        prediction = self.net.forward()['Dense2'][0]
+        featrueVector=self.net.blobs['ActivationAbs4'].data[0]
+        return prediction, featrueVector
+
+    def getFeatureVector(self, resized):
+        self.net.blobs['data'].data[...] = cv2.split(resized)
+        fvector = self.net.forward(start='Conv1', end='ActivationAbs4')['ActivationAbs4']
+        return  fvector
+
         
     def __init__(self, protoTXTPath, weightsPath):
         import caffe
@@ -578,4 +621,7 @@ class Predictor:
         self.std  = cv2.imread(os.path.join(Predictor.ROOT,'trainSTD.png')).astype('float')
 
 
-    
+if __name__=='__main__':
+    d=DataRow.dummyDataRow()
+    d.show()
+

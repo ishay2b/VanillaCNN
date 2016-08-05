@@ -31,3 +31,11 @@ VanillaCNN.xcodeproj
 .project
 .pydevproject
 *.pdf
+testimages
+best.caffemodel
+*.hd5
+test.list.txt
+train.list.txt
+snap_iter_*
+*.cache
+clusterLog.txt

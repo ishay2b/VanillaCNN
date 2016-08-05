@@ -9,39 +9,10 @@ from zipfile import ZipFile
 from urllib import urlretrieve
 
 #Import helper functions
-from DataRow import DataRow, ErrorAcum, Predictor, getGitRepFolder, createDataRowsFromCSV, getValidWithBBox, writeHD5
+from DataRow import DataRow, ErrorAcum, Predictor, createDataRowsFromCSV, getValidWithBBox, writeHD5
+from helpers import *
 
-###########################    PATHS TO SET   ####################
-# Either define CAFFE_ROOT in your enviroment variables or set it here
-CAFFE_ROOT = os.environ.get('CAFFE_ROOT','~/caffe/distribute')
-sys.path.append(CAFFE_ROOT+'/python')  # Add caffe python path so we can import it
-import caffe
-
-# Make sure dlib python path exists on PYTHONPATH else "pip install dlib" if needed.
-import dlib
-detector=dlib.get_frontal_face_detector() # Load dlib's face detector
-
-
-
-ROOT = getGitRepFolder()  # ROOT is the git root folder .
-sys.path.append(os.path.join(ROOT, 'python'))  # Assume git root directory
-DATA_PATH = os.path.join(ROOT, 'data')
-CSV_TEST  = os.path.join(ROOT, 'data', 'testImageList.txt')
-CSV_TRAIN = os.path.join(ROOT, 'data', 'trainImageList.txt')
-
-MEAN_TRAIN_SET = cv2.imread(os.path.join(ROOT, 'trainMean.png')).astype('f4')
-STD_TRAIN_SET  = cv2.imread(os.path.join(ROOT, 'trainSTD.png')).astype('f4')
-
-AFW_DATA_PATH = os.path.join(ROOT, 'data', 'testimages')
-AFW_MAT_PATH = os.path.join(ROOT, 'data', 'anno-v7.mat')
-
-PATH_TO_WEIGHTS  = os.path.join(ROOT, 'ZOO', 'vanillaCNN.caffemodel')
-PATH_TO_DEPLOY_TXT = os.path.join(ROOT, 'ZOO', 'vanilla_deploy.prototxt')
-
-detector=dlib.get_frontal_face_detector()
-
-###########################    STEPS TO RUN       ####################
-AFW_STEPS =['downloadAFW', 
+AFW_STEPS =['downloadAFW',
             'createAFW_TestSet',
             'testAFW_TestSet'] # Steps needed for AFW
 
@@ -54,42 +25,17 @@ AFLW_STEPS=['downloadALFW',
             'testAFLW_TestSet', 
             'testErrorMini'] # Steps needed for AFLW
 
-STEPS =['trainSetHD5', 'calcTrainSetMean'] # AFLW_STEPS+AFW_STEPS # Run AFLW and AFW steps
+
+STEPS = AFLW_STEPS+AFW_STEPS # Run AFLW and AFW steps
 
 ##########################################    SCRIPT STEPS       ##################################################
 
 if 'downloadAFW' in STEPS:
-    theurl = 'https://www.ics.uci.edu/~xzhu/face/AFW.zip'
-    filename = ROOT+'/AFW.zip'
-    if os.path.isfile(filename):
-        print "AFW.zip already downloaded"
-    else:
-        print "Downloading "+theurl + " ....."
-        name, hdrs = urlretrieve(theurl, filename)
-        print "Finished downloading AFW....."
-        
-    print "Extracting AFW zip file......"
-    folderPATH = ROOT+'/data'
-    with ZipFile(filename) as theOpenedFile:
-        theOpenedFile.extractall(folderPATH)
-        theOpenedFile.close()
+    downloadAFW()
 
 if 'downloadAFLW' in STEPS:
-    theurl='http://mmlab.ie.cuhk.edu.hk/archive/CNN/data/train.zip'
-    filename = ROOT+'/AFLW.zip'
-    if os.path.isfile(filename):
-        print "AFLW.zip training data already downloaded"
-    else:
-        print "Downloading "+theurl + " ....."
-        name, hdrs = urlretrieve(theurl, filename)
-        print "Finished downloading AFLW....."
-
-    print 'Extracting zip data...'
-    folderPATH = ROOT+'/data'
-    with ZipFile(filename) as theOpenedFile:
-        theOpenedFile.extractall(folderPATH)
-        theOpenedFile.close()
-    print "Done extracting AFW zip folder"
+    downloadAFLW()
+    
 
 if 'testSetHD5' in STEPS or 'testSetPickle' in STEPS:
     print "Creating test set....."
