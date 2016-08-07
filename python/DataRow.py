@@ -149,29 +149,20 @@ def writeHD5(dataRows, outputPath, setTxtFilePATH, meanTrainSet, stdTrainSet , I
     setTxtFile.flush()
     setTxtFile.close()
     
-    
-    
-  
-
-
 
 class ErrorAcum:  # Used to count error per landmark
     def __init__(self):
         self.errorPerLandmark = np.zeros(5, dtype ='f4')
         self.itemsCounter = 0
-        self.failureCounter = 0
         
     def __repr__(self):
-        return '%f mean error, %d items, %d failures  %f precent' % (self.meanError().mean()*100, self.itemsCounter, self.failureCounter, float(self.failureCounter)/self.itemsCounter if self.itemsCounter>0 else 0)
+        return '%f mean error, %d items' % (self.meanError().mean()*100, self.itemsCounter)
         
         
     def add(self, groundTruth, pred):
         normlized = mse_normlized(groundTruth, pred)
         self.errorPerLandmark += normlized
         self.itemsCounter +=1
-        if normlized.mean() > 0.1: 
-            # Count error above 10% as failure
-            self.failureCounter +=1
 
     def meanError(self):
         if self.itemsCounter > 0:
@@ -183,7 +174,6 @@ class ErrorAcum:  # Used to count error per landmark
         ret = ErrorAcum()
         ret.errorPerLandmark = self.errorPerLandmark + x.errorPerLandmark
         ret.itemsCounter    = self.itemsCounter + x.itemsCounter
-        ret.failureCounter  = self.failureCounter + x.failureCounter        
         return ret
         
     def plot(self):
@@ -319,6 +309,7 @@ class DataRow:
     
     IMAGE_SIZE = 40
     def __init__(self, path='', leftEye=(0, 0, ), rightEye=(0, 0), middle=(0, 0), leftMouth=(0, 0), rightMouth=(0, 0)):
+        self.path = path # For debug, keep the name of the image,
         self.image = cv2.imread(path)
         self.leftEye = leftEye
         self.rightEye = rightEye
