@@ -39,3 +39,5 @@ train.list.txt
 snap_iter_*
 *.cache
 clusterLog.txt
+.spyderproject
+.spyderworkspace

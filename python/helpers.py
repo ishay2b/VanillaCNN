@@ -105,6 +105,200 @@ def writeDictionaryToHD5(dict, outputPath, setTxtFilePATH):
     setTxtFile.close()
 
     
+'''    STEPS: Download, create train and test pickle, create train and test hd5 clusters, train, select best snap shot          '''
+
+def downloadTrainingSet():
+    from DataRow import createDataRowsFromCSV, getValidWithBBox
+    MTFL_LINK = 'http://mmlab.ie.cuhk.edu.hk/projects/TCDCN/data/MTFL.zip'
+    MTFL_ZIP = ROOT+"/MTFL.zip"
+    if os.path.isfile(MTFL_ZIP):
+        print "MTFL.zip already downloaded"
+    else:
+        print "Downloading:"+MTFL_ZIP+" from url:"+MTFL_LINK+"....."
+        urlretrieve(MTFL_LINK, MTFL_ZIP)
+        print "Finished download. Extracting file....."
+        with ZipFile(MTFL_ZIP) as f:
+            f.extractall(ROOT+'/data')
+            print "Done extracting MTFL"
+            f.close()
+
+def downloadAFW(): 
+    theurl = 'https://www.ics.uci.edu/~xzhu/face/AFW.zip'
+    filename = ROOT+'/AFW.zip'
+    if os.path.isfile(filename):
+        print "AFW.zip already downloaded"
+    else:
+        print "Downloading "+theurl + " ....."
+        name, hdrs = urlretrieve(theurl, filename)
+        print "Finished downloading AFW. Extracting AFW zip file......"
+        folderPATH = ROOT+'/data'
+        with ZipFile(filename) as theOpenedFile:
+            theOpenedFile.extractall(folderPATH)
+            theOpenedFile.close()
+
+def downloadAFLW():
+    theurl='http://mmlab.ie.cuhk.edu.hk/archive/CNN/data/train.zip'
+    filename = ROOT+'/AFLW.zip'
+    if os.path.isfile(filename):
+        print "AFLW.zip training data already downloaded"
+    else:
+        print "Downloading "+theurl + " ....."
+        name, hdrs = urlretrieve(theurl, filename)
+        print "Finished downloading AFLW. Extracting zip data..."
+        folderPATH = ROOT+'/data'
+        with ZipFile(filename) as theOpenedFile:
+            theOpenedFile.extractall(folderPATH)
+            theOpenedFile.close()
+        print "Done extracting AFW zip folder"
+
+      
+def createTrainingSetPickle():
+    downloadTrainingSet()
+    AFLW_PATH = os.path.join(ROOT,'data')
+    CSV_MTFL = os.path.join(AFLW_PATH,'training.txt')
+    dataRowsMTFL_CSV  = createDataRowsFromCSV(CSV_MTFL , DataRow.DataRowFromMTFL, AFLW_PATH)
+    print "Finished reading %d rows from train" % len(dataRowsMTFL_CSV)
+    dataRowsMTFLValid,R = getValidWithBBox(dataRowsMTFL_CSV)
+    print "Original test:",len(dataRowsMTFL_CSV), "Valid Rows:", len(dataRowsMTFLValid), " No faces at all", R.noFacesAtAll, " Illegal landmarks:", R.outsideLandmarks, " Could not match:", R.couldNotMatch
+    with open('trainSetMTFL.pickle','w') as f:
+        dump(dataRowsMTFLValid,f)
+    print "Finished dumping to trainSetMTFL.pickle"        
+    dataRowsMTFL_CSV=[]
+
+
+def createGMM():
+    from DataRow import Predictor
+    gmmStartTime = timeit.default_timer()
+    
+    with open('trainSetMTFL.pickle','r') as f:
+        dataRowsTrainValid = load(f)
+        
+    predictor = Predictor(protoTXTPath=PATH_TO_DEPLOY_TXT, weightsPath=PATH_TO_WEIGHTS)
+
+    gmmInput=[]
+
+    for i, dataRow in enumerate(dataRowsTrainValid):
+        if i%100 ==0:
+            print "Getting feature vector of row:",i
+            
+        image, lm_0_5 = predictor.preprocess(dataRow.image, dataRow.landmarks())
+        fvector = predictor.getFeatureVector(image)
+        gmmInput.append(fvector.flatten())
+
+    print "Extracted ",len(gmmInput)," feature vector of shape:", fvector.shape
+    #Calculate GMM
+    from sklearn import mixture
+    gmix = mixture.GMM(n_components=64, covariance_type='full')
+    gmix.fit(gmmInput)
+    print "Done calculating gmm matrix"
+    with open('gmm.pickle','w') as f:
+        dump(gmix.means_, f)    
+            
+    print "createGMM: run time ",timeit.default_timer() - gmmStartTime 
+
+
+def createClusteredData(dataRows, outputName, txtList, protoTXTPath, weightsPath, gmm):    
+    '''
+    cluster each data row by nearest neighbor, and write hd5 data to seperate folders 0..63
+    Should be called once for train and econd for test data
+    '''    
+    #Load Vanilla weights 
+    predictor = Predictor(protoTXTPath=protoTXTPath, weightsPath=weightsPath)
+
+    #Prepend a vector of 64 vectors
+    clusters =[[] for i in range(64)]
+    
+    for i, dataRow in enumerate(dataRows):
+        if i%100 ==0: # Comfort print
+            print "Getting feature vector of row:",i
+        
+        dataRow40 = dataRow.copyCroppedByBBox(dataRow.fbbox)
+        image, lm_0_5 = predictor.preprocess(dataRow40.image, dataRow40.landmarks())
+        dataRow40.fvector = predictor.getFeatureVector(image).flatten()
+        clusterIndex = findNearestNeigher(gmm, dataRow40.fvector)
+        clusters[clusterIndex].append((dataRow40.fvector, lm_0_5))
+
+    dist=[len(c) for c in clusters]
+    print "Data distribution:", dist
+    #plot(dist); title('Traning clusters number of samples.'); show()
+    
+    # Create HD5 train data from clussters
+    for i in range(64):
+        cluster=clusters[i]
+        
+        vecs=np.array([c[0] for c in cluster])
+        landmarks=np.array([c[1] for c in cluster])
+                
+        clusterPath=os.path.join(CLUSTERS_PATH,str(i))
+        if not os.path.isdir(clusterPath):
+            os.mkdir(clusterPath)
+        dict={
+            "ActivationAbs4": vecs,
+            "landmarks": landmarks
+        }
+        writeDictionaryToHD5(dict, os.path.join(clusterPath,outputName), os.path.join(clusterPath,txtList))
+
+
+
+def parseLog(logFilePath):
+    import re
+    floatReg='[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?'
+
+    regex       =re.compile('.* Iteration (\d+), Testing net \(#\d+\)')
+    regexLos    =re.compile('.*Test net output #0: loss = (%s) (\* 1 = %s loss)'%(floatReg,floatReg))
+    regexLos    =re.compile('.*Test net output #0: loss = (%s)'%(floatReg,))
+
+    found=0
+
+    xAxis=[]
+    yAxis=[]
+
+    with open(logFilePath) as f:
+        global result
+        for line in f:
+            xresult = regex.search(line)
+            if (xresult):
+                xAxis.append(int(xresult.groups(1)[0]))
+                
+            yresult = regexLos.search(line)
+            if (yresult):
+                yAxis.append(float(yresult.groups(1)[0]))
+
+    mnSize = min(len(xAxis),len(yAxis))
+    skip = 0
+
+    xAxis = xAxis[skip:mnSize]
+    yAxis = yAxis[skip:mnSize]
+    return xAxis, yAxis
+
+
+def createBest(clustersPath, pathToOrig=ORIG_VANILLA_WEIGHTS):
+    '''
+    Assume snapshot intervel is synced with iteration loss plot we can get the best snapshot    
+    pathToOrig is needed if the loss only got worse, we use original set, debug mode.
+    '''
+    import os, shutil
+    from glob import glob
+
+    xAxis, yAxis = parseLog(os.path.join(clustersPath,'clusterLog.txt'))
+    print "Parsed loss enteries:", len(xAxis) ,len(yAxis)
+    minIndex=np.argmin(yAxis)
+    x,y= xAxis[minIndex], yAxis[minIndex]
+
+    print "Min loss error found at (x,y):", x, y 
+    source = os.path.join(clustersPath, 'snap_iter_%d.caffemodel' % x)
+    if minIndex==0:
+        print "Error always went up!!!. The first initial snapshot was better, using it. Need to know why this happened. Choosing latest"
+        files = glob("snap_iter*.caffemodel")
+        files.sort(key=os.path.getmtime)        
+        source = files[0]
+
+    target = os.path.join(clustersPath, 'best.caffemodel')
+    print "Copying:", source, "  TO: ", target
+    shutil.copy(source,target)
+    return xAxis, yAxis
+
+
 def findNearestNeigher(gmm, v):
     '''return nearest neighbor index for vector v in gmm'''  
     import numpy as np  
@@ -166,151 +360,39 @@ def trainCluster(clusterIndex, pathToClusters):
 
 
 
+def runTweakTest(gmm, DEBUG=False):
+    from DataRow import ErrorAcum, Predictor
+    fullyConnected=[OnlyDensePredictor(i) for i in range(64)] # Allocate 64 partitions
+    testError=[ErrorAcum() for i in range(64)]
+    vanillaTestError=[ErrorAcum() for i in range(64)]
 
+    predictorVanilla = Predictor(protoTXTPath=PATH_TO_DEPLOY_TXT, weightsPath=PATH_TO_WEIGHTS)
 
-def parseLog(logFilePath):
-    import re
-    floatReg='[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?'
-
-    regex       =re.compile('.* Iteration (\d+), Testing net \(#\d+\)')
-    regexLos    =re.compile('.*Test net output #0: loss = (%s) (\* 1 = %s loss)'%(floatReg,floatReg))
-    regexLos    =re.compile('.*Test net output #0: loss = (%s)'%(floatReg,))
-
-    found=0
-
-    xAxis=[]
-    yAxis=[]
-
-    with open(logFilePath) as f:
-        global result
-        for line in f:
-            xresult = regex.search(line)
-            if (xresult):
-                xAxis.append(int(xresult.groups(1)[0]))
-                
-            yresult = regexLos.search(line)
-            if (yresult):
-                yAxis.append(float(yresult.groups(1)[0]))
-
-    mnSize = min(len(xAxis),len(yAxis))
-    skip = 0
-
-    xAxis = xAxis[skip:mnSize]
-    yAxis = yAxis[skip:mnSize]
-    return xAxis, yAxis
-
-
-def createBest(clustersPath, pathToOrig=ORIG_VANILLA_WEIGHTS):
-    '''
-    Assume snapshot intervel is synced with iteration loss plot we can get the best snapshot    
-    pathToOrig is needed if the loss only got worse, we use original set, debug mode.
-    '''
-    import os, shutil
-
-
-    xAxis, yAxis = parseLog(os.path.join(clustersPath,'clusterLog.txt'))
-    print "Parsed loss enteries:", len(xAxis) ,len(yAxis)
-    minIndex=np.argmin(yAxis)
-    x,y= xAxis[minIndex], yAxis[minIndex]
-
-    print "Min loss error found at (x,y):", x, y 
-    source = os.path.join(clustersPath, 'snap_iter_%d.caffemodel' % x)
-    if minIndex==0:
-        print "Error always went up!!!. The first initial snapshot was better, using it. Need to know why this happened."
-        source = pathToOrig
-    target = os.path.join(clustersPath, 'best.caffemodel')
-    print "Copying:", source, "  TO: ", target
-    shutil.copy(source,target)
-    return xAxis, yAxis
-
-
-def createTrainingSet():
-    from DataRow import *
-    MTFL_LINK = 'http://mmlab.ie.cuhk.edu.hk/projects/TCDCN/data/MTFL.zip'
-    MTFL_ZIP = ROOT+"/MTFL.zip"
-    if os.path.isfile(MTFL_ZIP):
-        print "MTFL.zip already downloaded"
-    else:
-        print "Downloading:"+MTFL_ZIP+" from url:"+MTFL_LINK+"....."
-        urlretrieve(MTFL_LINK, MTFL_ZIP)
-        print "Finished download. Extracting file....."
-        with ZipFile(MTFL_ZIP) as f:
-            f.extractall(ROOT+'/data')
-            print "Done extracting MTFL"
-            f.close()
-            
-    AFLW_PATH = os.path.join(ROOT,'data')
-    CSV_MTFL = os.path.join(AFLW_PATH,'training.txt')
-    dataRowsMTFL_CSV  = createDataRowsFromCSV(CSV_MTFL , DataRow.DataRowFromMTFL, AFLW_PATH)
-    print "Finished reading %d rows from train" % len(dataRowsMTFL_CSV)
-    dataRowsMTFLValid,R = getValidWithBBox(dataRowsMTFL_CSV)
-    print "Original test:",len(dataRowsMTFL_CSV), "Valid Rows:", len(dataRowsMTFLValid), " No faces at all", R.noFacesAtAll, " Illegal landmarks:", R.outsideLandmarks, " Could not match:", R.couldNotMatch
-    with open('trainSetMTFL.pickle','w') as f:
-        dump(dataRowsMTFLValid,f)
-    print "Finished dumping to trainSetMTFL.pickle"        
-    dataRowsMTFL_CSV=[]
-
-
-def createGMM():
-    from DataRow import Predictor
-    gmmStartTime = timeit.default_timer()
-    
-    with open('trainSetMTFL.pickle','r') as f:
-        dataRowsTrainValid = load(f)
+    with open('testSetPickle.pickle') as f:
+        dataRowsTestValid=load(f)
         
-    predictor = Predictor(protoTXTPath=PATH_TO_DEPLOY_TXT, weightsPath=PATH_TO_WEIGHTS)
-
-    gmmInput=[]
-
-    for i, dataRow in enumerate(dataRowsTrainValid):
-        if i%100 ==0:
-            print "Getting feature vector of row:",i
-            
-        image, lm_0_5 = predictor.preprocess(dataRow.image, dataRow.landmarks())
-        fvector = predictor.getFeatureVector(image)
-        gmmInput.append(fvector.flatten())
-
-    print "Extracted ",len(gmmInput)," feature vector of shape:", fvector.shape
-    #Calculate GMM
-    from sklearn import mixture
-    gmix = mixture.GMM(n_components=64, covariance_type='full')
-    gmix.fit(gmmInput)
-    print "Done calculating gmm matrix"
-    with open('gmm.pickle','w') as f:
-        dump(gmix.means_, f)    
-            
-    print "createGMM: run time ",timeit.default_timer() - gmmStartTime 
-
-def downloadAFW(): 
-    theurl = 'https://www.ics.uci.edu/~xzhu/face/AFW.zip'
-    filename = ROOT+'/AFW.zip'
-    if os.path.isfile(filename):
-        print "AFW.zip already downloaded"
-    else:
-        print "Downloading "+theurl + " ....."
-        name, hdrs = urlretrieve(theurl, filename)
-        print "Finished downloading AFW....."
+    print "Loaded ",len(dataRowsTestValid), " valid rows from pickle file."
         
-    print "Extracting AFW zip file......"
-    folderPATH = ROOT+'/data'
-    with ZipFile(filename) as theOpenedFile:
-        theOpenedFile.extractall(folderPATH)
-        theOpenedFile.close()
+    beginTest = timeit.default_timer()
 
-def downloadAFLW():
-    theurl='http://mmlab.ie.cuhk.edu.hk/archive/CNN/data/train.zip'
-    filename = ROOT+'/AFLW.zip'
-    if os.path.isfile(filename):
-        print "AFLW.zip training data already downloaded"
-    else:
-        print "Downloading "+theurl + " ....."
-        name, hdrs = urlretrieve(theurl, filename)
-        print "Finished downloading AFLW....."
+    for i, dataRow in enumerate(dataRowsTestValid):
+        image, lm_0_5 = predictorVanilla.preprocess(dataRow.image, dataRow.landmarks())
+        vanillaPrediction, featureVector = predictorVanilla.predictReturnFeatureVectorAsWell(image)
+        clusterIndex = findNearestNeigher(gmm, featureVector.flatten())
+        prediction = fullyConnected[clusterIndex].predict(featureVector)
+        testError[clusterIndex].add(lm_0_5, prediction)
+        vanillaTestError[clusterIndex].add(lm_0_5, vanillaPrediction)
 
-    print 'Extracting zip data...'
-    folderPATH = ROOT+'/data'
-    with ZipFile(filename) as theOpenedFile:
-        theOpenedFile.extractall(folderPATH)
-        theOpenedFile.close()
-    print "Done extracting AFW zip folder"
+        dataRow.prediction = (prediction+0.5)*40.  # Scale -0.5..+0.5 to 0..40
+        
+        if i%300==0:
+            print "run test ",i
+            if DEBUG:
+                dataRow.prediction = dataRow.inverseScaleAndOffset(dataRow.prediction) # Scale up to the original image scale
+                dataRow.show(title=str(i))
+            
+    for i, err in enumerate(testError):
+        print i, "Vanilla Error:",vanillaTestError[i], " tweaked Error:", testError[i]
+
+    print "Time diff running tweak test",timeit.default_timer()-beginTest 
 

@@ -5,91 +5,30 @@ import os
 import cv2
 import sys
 from pickle import load, dump
-from zipfile import ZipFile
-from urllib import urlretrieve
 
 #Import helper functions
 from helpers import *
 from DataRow import *
-
+from pdb import set_trace
 
 #from matplotlib.pylab import *
 FULL_STEPS=[
-'createTrainingSet', 
+'createTrainingSetPickle', 
 'createGMM', 
 'createTrainClusters',
 'createTestSetPickle',
 'createTestClusters',
 'trainCLusters',
-'runTest']
+'runTweakTest']
 
-STEPS=['', '','runTest']
-#STEPS=['createTrainingSet', 'createTrainClusters','createTestClusters','runTest']
+STEPS=['', 'viewCluster']
+#STEPS=['createTrainingSetPickle', 'createTrainClusters','createTestClusters','runTweakTest']
 
 start = timeit.default_timer() # total running time 
 
 # Create the MTFL benchmark
-if 'createTrainingSet' in STEPS:  
-    createTrainingSet()
-
-if 'createGMM' in STEPS:
-    createGMM()
-
-#Load GMM
-with open('gmm.pickle') as f:
-    gmm=load(f)
-
-def createClusteredData(dataRows, outputName, txtList, protoTXTPath, weightsPath):    
-    '''
-    cluster each data row by nearest neighbor, and write hd5 data to seperate folders 0..63
-    Should be called once for train and econd for test data
-    '''    
-    #Load Vanilla weights 
-    predictor = Predictor(protoTXTPath=protoTXTPath, weightsPath=weightsPath)
-
-    #Prepend a vector of 64 vectors
-    clusters =[[] for i in range(64)]
-    
-    for i, dataRow in enumerate(dataRows):
-        if i%100 ==0: # Comfort print
-            print "Getting feature vector of row:",i
-        
-        dataRow40 = dataRow.copyCroppedByBBox(dataRow.fbbox)
-        image, lm_0_5 = predictor.preprocess(dataRow40.image, dataRow40.landmarks())
-        dataRow40.fvector = predictor.getFeatureVector(image).flatten()
-        clusterIndex = findNearestNeigher(gmm, dataRow40.fvector)
-        clusters[clusterIndex].append((dataRow40.fvector, lm_0_5))
-
-    dist=[len(c) for c in clusters]
-    print "Data distribution:", dist
-    #plot(dist); title('Traning clusters number of samples.'); show()
-    
-    # Create HD5 train data from clussters
-    for i in range(64):
-        cluster=clusters[i]
-        
-        vecs=np.array([c[0] for c in cluster])
-        landmarks=np.array([c[1] for c in cluster])
-                
-        clusterPath=os.path.join(CLUSTERS_PATH,str(i))
-        if not os.path.isdir(clusterPath):
-            os.mkdir(clusterPath)
-        dict={
-            "ActivationAbs4": vecs,
-            "landmarks": landmarks
-        }
-        writeDictionaryToHD5(dict, os.path.join(clusterPath,outputName), os.path.join(clusterPath,txtList))
-
-if 'createTrainClusters' in STEPS:
-    print "Creating train set"
-    with open('trainSetMTFL.pickle','r') as f:
-        dataRows = load(f)
-    createClusteredData(dataRows=dataRows, 
-        outputName='train.hd5',
-        txtList='train.list.txt',
-        protoTXTPath=PATH_TO_DEPLOY_TXT,
-        weightsPath=PATH_TO_WEIGHTS)
-
+if 'createTrainingSetPickle' in STEPS:  
+    createTrainingSetPickle()
 
 if 'createTestSetPickle' in STEPS:
     print "Creating test set....."
@@ -99,6 +38,24 @@ if 'createTestSetPickle' in STEPS:
     print "Original test:",len(dataRowsTest_CSV), "Valid Rows:", len(dataRowsTestValid), " noFacesAtAll", R.noFacesAtAll, " outside:", R.outsideLandmarks, " couldNotMatch:", R.couldNotMatch
     with open('testSetPickle.pickle','w') as f:
         dump(dataRowsTestValid, f)
+
+if 'createGMM' in STEPS:
+    createGMM()
+
+#Load GMM
+with open('gmm.pickle') as f:
+    gmm=load(f)
+
+if 'createTrainClusters' in STEPS:
+    print "Creating train set"
+    with open('trainSetMTFL.pickle','r') as f:
+        dataRows = load(f)
+    createClusteredData(dataRows=dataRows, 
+        outputName='train.hd5',
+        txtList='train.list.txt',
+        protoTXTPath=PATH_TO_DEPLOY_TXT,
+        weightsPath=PATH_TO_WEIGHTS,
+        gmm=gmm)
 
 if 'createTestClusters' in STEPS:
     print "Creating HD5 test data for clusters. Loading..."
@@ -110,7 +67,8 @@ if 'createTestClusters' in STEPS:
         txtList='test.list.txt',
         outputName='test.hd5', 
         protoTXTPath=PATH_TO_DEPLOY_TXT, 
-        weightsPath=PATH_TO_WEIGHTS)
+        weightsPath=PATH_TO_WEIGHTS,
+        gmm=gmm)
 
     print "Finished creating test hd5"
 
@@ -119,58 +77,26 @@ if 'trainClusters' in STEPS:
         trainCluster(i, CLUSTERS_PATH)
 
 DEBUG=True
-if 'runTest' in STEPS:
-    fullyConnected=[OnlyDensePredictor(i) for i in range(64)] # Allocate 64 partitions
-    testError=[ErrorAcum() for i in range(64)]
-    vanillaTestError=[ErrorAcum() for i in range(64)]
+if 'runTweakTest' in STEPS:
+    runTweakTest(gmm)
 
-    predictorVanilla = Predictor(protoTXTPath=PATH_TO_DEPLOY_TXT, weightsPath=PATH_TO_WEIGHTS)
-
-    with open('testSetPickle.pickle') as f:
-        dataRowsTestValid=load(f)
-        
-    print "Loaded ",len(dataRowsTestValid), " valid rows from pickle file."
-        
-    beginTest = timeit.default_timer()
-
-    for i, dataRow in enumerate(dataRowsTestValid):
-        image, lm_0_5 = predictorVanilla.preprocess(dataRow.image, dataRow.landmarks())
-        vanillaPrediction, featureVector = predictorVanilla.predictReturnFeatureVectorAsWell(image)
-        clusterIndex = findNearestNeigher(gmm, featureVector.flatten())
-        prediction = fullyConnected[clusterIndex].predict(featureVector)
-        testError[clusterIndex].add(lm_0_5, prediction)
-        vanillaTestError[clusterIndex].add(lm_0_5, vanillaPrediction)
-
-        dataRow.prediction = (prediction+0.5)*40.  # Scale -0.5..+0.5 to 0..40
-        
-        if i%300==0:
-            print "run test ",i
-            if DEBUG:
-                dataRow.prediction = dataRow.inverseScaleAndOffset(dataRow.prediction) # Scale up to the original image scale
-                dataRow.show(title=str(i))
-            
-    for i, err in enumerate(testError):
-        print i, "Vanilla Error:",vanillaTestError[i], " tweaked Error:", testError[i]
-
-    print "Time diff",timeit.default_timer()-beginTest 
-
- 
-
-def cleanup(STEPS):
-    if 'cleanHD5related' in STEPS:
-        pass
-
+if 'viewCluster' in STEPS:
+    clusterIndex = 0
+    clusterPath = os.path.join(CLUSTERS_PATH,str(clusterIndex))
+    clusterTrainPath= os.path.join(clusterPath, 'train.hd5')
+    import h5py
+    f5 = h5py.File(clusterTrainPath)
+    print "keys:", f5.keys()
+    imgs = f5[f5.keys()[0]]
+    lnmrs_05 = f5[f5.keys()[1]]
+    print imgs.shape
 
 print "Running time:", timeit.default_timer() - start 
 
 ''' STEPS
-a 64 GMM clustring so we can run nearest neighbor 
-
-For each data row:
-     preprocess, get FeatureVector Append to gmm input
-Calculate GMM
-For each data row:
-    cluster_index = find nearest neighbor
-    dump vector to hd5 cluster bu index
+if __name__=='__main__':
+    from qtComm import qtComm
+    qtComm('run tweak.py')
 
 '''
+
