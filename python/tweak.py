@@ -9,7 +9,8 @@ from pickle import load, dump
 #Import helper functions
 from helpers import *
 from DataRow import *
-from pdb import set_trace
+import sys, select, os
+
 
 #from matplotlib.pylab import *
 FULL_STEPS=[
@@ -21,10 +22,16 @@ FULL_STEPS=[
 'trainCLusters',
 'runTweakTest']
 
-STEPS=['', 'viewCluster']
+STEPS=['', 'createGMM']
 #STEPS=['createTrainingSetPickle', 'createTrainClusters','createTestClusters','runTweakTest']
 
 start = timeit.default_timer() # total running time 
+
+class Stats():
+    ''' empty container to reutrn stats
+    '''
+    pass 
+
 
 # Create the MTFL benchmark
 if 'createTrainingSetPickle' in STEPS:  
@@ -34,41 +41,117 @@ if 'createTestSetPickle' in STEPS:
     print "Creating test set....."
     dataRowsTest_CSV  = createDataRowsFromCSV(CSV_TEST , DataRow.DataRowFromNameBoxInterlaved, DATA_PATH)
     print "Finished reading %d rows from test" % len(dataRowsTest_CSV)
-    dataRowsTestValid,R = getValidWithBBox(dataRowsTest_CSV)
+    dataRowsTestValid,R = getValidWithBBox(dataRowsTest_CSV, resizeTo=None)
+
     print "Original test:",len(dataRowsTest_CSV), "Valid Rows:", len(dataRowsTestValid), " noFacesAtAll", R.noFacesAtAll, " outside:", R.outsideLandmarks, " couldNotMatch:", R.couldNotMatch
     with open('testSetPickle.pickle','w') as f:
         dump(dataRowsTestValid, f)
 
+#Load Vanilla weights 
+vanilla_predictor = Predictor(protoTXTPath=PATH_TO_DEPLOY_TXT, weightsPath=PATH_TO_WEIGHTS)
 if 'createGMM' in STEPS:
-    createGMM()
+    with open('trainSetMTFL.pickle','r') as f:
+        dataRows = load(f)
+    gmm=createGMM(vanilla_predictor, dataRows)
+    with open('gmm.pickle','w') as f:
+        dump(gmm, f)    
 
 #Load GMM
 with open('gmm.pickle') as f:
     gmm=load(f)
 
-if 'createTrainClusters' in STEPS:
-    print "Creating train set"
-    with open('trainSetMTFL.pickle','r') as f:
+
+if 'calculateClusterIndex' in STEPS:
+    with open('trainSetMTFL.pickle', 'r') as f: # WARNING: USING TEST FOR DEBUG ONLY
         dataRows = load(f)
-    createClusteredData(dataRows=dataRows, 
+    print "Finished loading %d rows from train data" % len(dataRows)
+
+    clusters =[[] for i in range(64)]
+    
+    for i, dataRow in enumerate(dataRows):
+        if i%1000 ==0: # Comfort print
+            print "Getting feature vector of row:",i
+        
+        dataRowFaceOnly = dataRow.copyCroppedByBBox(dataRow.fbbox)
+        image, lm_0_5 = vanilla_predictor.preprocess(dataRowFaceOnly.image, dataRowFaceOnly.landmarks())
+        dataRow.fvector = vanilla_predictor.getFeatureVector(image).flatten() # Save the feature vector to original data fow
+        dataRow.clusterIndex = findNearestNeigher(gmm, dataRow.fvector) # Save the cluster index to the original data row
+        clusters[dataRow.clusterIndex].append(dataRow)
+
+    dist=[len(c) for c in clusters]
+    #plot(dist); title('Traning clusters number of samples.'); show()
+    print "Original data distribution:", dist
+
+    with open('trainSetMTFL.pickle','w') as f:
+        dump(dataRows,f)
+    print "Finished resaving train data with feature vectors+cluster index as: trainSetMTFL.pickle"
+
+if 'augmentClusters' in STEPS:
+    with open('trainSetMTFL.pickle', 'r') as f: 
+        dataRows = load(f)
+
+    clusters = [[] for i in range(64)]
+    stats=Stats()
+    stats.WRONG_CLUSTER =0
+    stats.AUGMENTET_SUM = 0 
+    stats.LANDMARKS_OUTOF_RANGE = 0 
+
+    for dataRow in dataRows:
+        clusters[dataRow.clusterIndex].append(dataRow)
+
+    try:
+        for ci, cluster in enumerate(clusters):
+            break
+            for i in range(len(cluster)-1):
+                for j in range (i+1, len(cluster)):
+                    A = cluster[i]
+                    B = cluster[j]
+                    A_T = A.transformedDataRow(B.landmarks()) # Might return a small cropped image due to rotatin
+                    if A_T is None:
+                        #Error - landmarks go out of range
+                        stats.LANDMARKS_OUTOF_RANGE += 1
+                    else:
+                        A_T = A_T.copyCroppedByBBox(A_T.fullImageBBox(), resizeTo=(Predictor.SIZE()))
+
+                        processed_image, A_T.lm_0_5 = vanilla_predictor.preprocess(A_T.image, A_T.landmarks())
+                        A_T.fvector = vanilla_predictor.getFeatureVector(processed_image).flatten()
+                        A_T.clusterIndex = findNearestNeigher(gmm, A_T.fvector)
+                        if A_T.clusterIndex != ci:
+                            # Error - new image does not belong to the same cluster, therfor rejectet.
+                            stats.WRONG_CLUSTER += 1
+                            print vars(stats)
+                        else:
+                            stats.AUGMENTET_SUM += 1
+                            clusters[ci].append(A_T)
+    except KeyboardInterrupt:
+        print "KeyboardInterrupt"
+
+    hist_aug = [len(c) for c in clusters]
+    print "Augmentes cluster sizes:", hist_aug
+
+    print vars(stats)
+    write_clusters_hdb5(
+        clusters=clusters,
         outputName='train.hd5',
-        txtList='train.list.txt',
-        protoTXTPath=PATH_TO_DEPLOY_TXT,
-        weightsPath=PATH_TO_WEIGHTS,
-        gmm=gmm)
+        txtList='train.list.txt')
+
+    print "Finished writing augmented training data hd5"
+
 
 if 'createTestClusters' in STEPS:
     print "Creating HD5 test data for clusters. Loading..."
     with open('testSetPickle.pickle','r') as f:
         dataRows=load(f)
     print "Loaded %d valid rows" % len(dataRows)
-    createClusteredData(
+    testClusters = createClusteredData(
         dataRows=dataRows, 
+        gmm=gmm,
+        predictor=vanilla_predictor)
+    print "Finished clustering original test data"
+    write_clusters_hdb5(
+        testVlusters,
         txtList='test.list.txt',
-        outputName='test.hd5', 
-        protoTXTPath=PATH_TO_DEPLOY_TXT, 
-        weightsPath=PATH_TO_WEIGHTS,
-        gmm=gmm)
+        outputName='test.hd5')
 
     print "Finished creating test hd5"
 
@@ -79,6 +162,7 @@ if 'trainClusters' in STEPS:
 DEBUG=True
 if 'runTweakTest' in STEPS:
     runTweakTest(gmm)
+
 
 if 'viewCluster' in STEPS:
     clusterIndex = 0

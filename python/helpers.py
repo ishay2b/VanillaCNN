@@ -153,58 +153,50 @@ def downloadAFLW():
 
       
 def createTrainingSetPickle():
+    from DataRow import *
+
     downloadTrainingSet()
     AFLW_PATH = os.path.join(ROOT,'data')
     CSV_MTFL = os.path.join(AFLW_PATH,'training.txt')
+    print ("Parsine training data CSV, May take some minutes.....")
     dataRowsMTFL_CSV  = createDataRowsFromCSV(CSV_MTFL , DataRow.DataRowFromMTFL, AFLW_PATH)
     print "Finished reading %d rows from train" % len(dataRowsMTFL_CSV)
-    dataRowsMTFLValid,R = getValidWithBBox(dataRowsMTFL_CSV)
-    print "Original test:",len(dataRowsMTFL_CSV), "Valid Rows:", len(dataRowsMTFLValid), " No faces at all", R.noFacesAtAll, " Illegal landmarks:", R.outsideLandmarks, " Could not match:", R.couldNotMatch
+    dataRowsMTFLValid,R = getValidWithBBox(dataRowsMTFL_CSV, resizeTo=_A([40., 40.]))
+    print "Original train:",len(dataRowsMTFL_CSV), "Valid Rows:", len(dataRowsMTFLValid), " No faces at all", R.noFacesAtAll, " Illegal landmarks:", R.outsideLandmarks, " Could not match:", R.couldNotMatch
     with open('trainSetMTFL.pickle','w') as f:
         dump(dataRowsMTFLValid,f)
     print "Finished dumping to trainSetMTFL.pickle"        
     dataRowsMTFL_CSV=[]
 
 
-def createGMM():
-    from DataRow import Predictor
-    gmmStartTime = timeit.default_timer()
+def createGMM(predictor, dataRows):
+    from sklearn import mixture    
     
-    with open('trainSetMTFL.pickle','r') as f:
-        dataRowsTrainValid = load(f)
-        
-    predictor = Predictor(protoTXTPath=PATH_TO_DEPLOY_TXT, weightsPath=PATH_TO_WEIGHTS)
-
+    gmmStartTime = timeit.default_timer()
     gmmInput=[]
 
-    for i, dataRow in enumerate(dataRowsTrainValid):
+    for i, dataRow in enumerate(dataRows):
         if i%100 ==0:
             print "Getting feature vector of row:",i
-            
-        image, lm_0_5 = predictor.preprocess(dataRow.image, dataRow.landmarks())
-        fvector = predictor.getFeatureVector(image)
-        gmmInput.append(fvector.flatten())
 
-    print "Extracted ",len(gmmInput)," feature vector of shape:", fvector.shape
+        cropped = dataRow.copyCroppedByBBox(dataRow.fbbox, resizeTo=predictor.SIZE()) # Get face only and resize to 40x40
+        image, lm_0_5 = predictor.preprocess(cropped.image, cropped.landmarks()) # Reduce mean, divide by std.
+        fvector = predictor.getFeatureVector(image) # run only paritail network, output shape is (1, 64, 3, 3)
+        gmmInput.append(fvector.flatten()) # append to gmm input, treat as a flat 576 float vector.
+
+    print "Extracted ",len(gmmInput)," feature vector of shape:", fvector.shape, " Building GMM will take some time..."
     #Calculate GMM
-    from sklearn import mixture
     gmix = mixture.GMM(n_components=64, covariance_type='full')
-    gmix.fit(gmmInput)
-    print "Done calculating gmm matrix"
-    with open('gmm.pickle','w') as f:
-        dump(gmix.means_, f)    
-            
+    gmix.fit(gmmInput)            
     print "createGMM: run time ",timeit.default_timer() - gmmStartTime 
+    return gmix.means_
 
 
-def createClusteredData(dataRows, outputName, txtList, protoTXTPath, weightsPath, gmm):    
+def createClusteredData(dataRows, gmm, predictor):    
     '''
-    cluster each data row by nearest neighbor, and write hd5 data to seperate folders 0..63
+    cluster each data row by nearest neighbor, and append the data row with feature vector + cluster index
     Should be called once for train and econd for test data
     '''    
-    #Load Vanilla weights 
-    predictor = Predictor(protoTXTPath=protoTXTPath, weightsPath=weightsPath)
-
     #Prepend a vector of 64 vectors
     clusters =[[] for i in range(64)]
     
@@ -214,20 +206,23 @@ def createClusteredData(dataRows, outputName, txtList, protoTXTPath, weightsPath
         
         dataRow40 = dataRow.copyCroppedByBBox(dataRow.fbbox)
         image, lm_0_5 = predictor.preprocess(dataRow40.image, dataRow40.landmarks())
-        dataRow40.fvector = predictor.getFeatureVector(image).flatten()
-        clusterIndex = findNearestNeigher(gmm, dataRow40.fvector)
-        clusters[clusterIndex].append((dataRow40.fvector, lm_0_5))
+        dataRow.fvector = predictor.getFeatureVector(image).flatten() # Save the feature vector to original data fow
+        dataRow.clusterIndex = findNearestNeigher(gmm, dataRow40.fvector) # Save the cluster index to the original data row
+        clusters[dataRow.clusterIndex].append((dataRow.fvector, lm_0_5))
 
     dist=[len(c) for c in clusters]
-    print "Data distribution:", dist
     #plot(dist); title('Traning clusters number of samples.'); show()
-    
+    print "Original data distribution:", dist
+    return clusters
+
+
+def write_clusters_hdb5(clusters, outputName, txtList):
     # Create HD5 train data from clussters
     for i in range(64):
         cluster=clusters[i]
         
-        vecs=np.array([c[0] for c in cluster])
-        landmarks=np.array([c[1] for c in cluster])
+        vecs=np.array([dataRow.fvector for dataRow in cluster])
+        landmarks=np.array([dataRow.landmarks_0_5() for dataRow in cluster]) # write scaled landmarks -0.5..+0.5 to hdf
                 
         clusterPath=os.path.join(CLUSTERS_PATH,str(i))
         if not os.path.isdir(clusterPath):
@@ -395,4 +390,21 @@ def runTweakTest(gmm, DEBUG=False):
         print i, "Vanilla Error:",vanillaTestError[i], " tweaked Error:", testError[i]
 
     print "Time diff running tweak test",timeit.default_timer()-beginTest 
+
+
+def matrixPlot(vec, title_=''):
+    ''' plot a vector of images in a matrix of sqrt(len(vec)) ^ 2
+    '''
+    figure()
+    title(title_)
+    z=0
+    rows =int(ceil(len(vec)**0.5))
+    cols =int(floor(len(vec)/rows))
+    for i in range(rows):
+        for j in range(cols):
+            if z<len(vec):
+                subplot(rows, cols, z+1)
+                imshow(cv2.cvtColor(vec[z], cv2.COLOR_BGR2RGB))
+                axis("off")
+            z += 1                
 

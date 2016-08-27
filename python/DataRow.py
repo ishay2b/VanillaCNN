@@ -12,6 +12,7 @@ import sys
 import csv
 
 from helpers import *
+from numpy import array as _A
 
 def mse_normlized(groundTruth, pred):
     delX = groundTruth[0]-groundTruth[2] 
@@ -47,8 +48,9 @@ def createDataRowsFromCSV(csvFilePath, csvParseFunc, DATA_PATH, limit = sys.maxi
                     return data 
     return data
 
-def getValidWithBBox(dataRows):
+def getValidWithBBox(dataRows, resizeTo=None):
     ''' Returns a list of valid DataRow of a given list of dataRows 
+        If shouldResize we resize the result to 40x40
     '''
     import dlib
     R=RetVal()
@@ -88,7 +90,7 @@ def getValidWithBBox(dataRows):
             if det_bbox.left<0 or det_bbox.top<0 or det_bbox.right>dataRow.image.shape[0] or det_bbox.bottom>dataRow.image.shape[1]:
                 R.outsideLandmarks += 1  # Saftey check, make sure nothing goes out of bound.
             else:
-                validRow.append(dataRow.copyCroppedByBBox(dataRow.fbbox))  
+                validRow.append(dataRow.copyCroppedByBBox(dataRow.fbbox, resizeTo))  
     
     
     return validRow,R 
@@ -308,9 +310,15 @@ class DataRow:
     global TrainSetSTD
     
     IMAGE_SIZE = 40
+
+    def fullImageBBox(self):
+        return BBox.BBoxFromLTRB(0, 0, int(self.image.shape[0]), int(self.image.shape[1]))
+
     def __init__(self, path='', leftEye=(0, 0, ), rightEye=(0, 0), middle=(0, 0), leftMouth=(0, 0), rightMouth=(0, 0)):
         self.path = path # For debug, keep the name of the image,
-        self.image = cv2.imread(path)
+        if len(path)>0:
+            self.image = cv2.imread(path)
+
         self.leftEye = leftEye
         self.rightEye = rightEye
         self.leftMouth = leftMouth
@@ -337,6 +345,7 @@ class DataRow:
         @landMarks : np.array
         set the landmarks from array
         """
+        landMarks = landMarks.flatten()
         self.leftEye = landMarks[0:2]
         self.rightEye = landMarks[2:4]
         self.middle = landMarks[4:6]
@@ -518,26 +527,34 @@ class DataRow:
         self.rightMouth = (int(self.rightMouth[0]), int(self.rightMouth[1]))
         return self        
          
-    def copyCroppedByBBox(self,fbbox, siz=np.array([40,40])):
+    def copyCroppedByBBox(self, fbbox, resizeTo=None):
         """
         @ fbbox : BBox
-        Returns a copy with cropped, scaled to size
+        returns a copy of the data with face only and resized if needed
+
         """        
-        
+        from numpy import array as _A
+        from copy import copy
+
         fbbox.makeInt() # assume BBox class
         if fbbox.width()<10 or fbbox.height()<10:
             print "Invalid bbox size:",fbbox
             return None
             
-        faceOnly = self.image[fbbox.top : fbbox.bottom, fbbox.left:fbbox.right, :]
         scaled = DataRow() 
-        scaled.image = cv2.resize(faceOnly, (int(siz[0]), int(siz[1])))    
+        faceOnly = self.image[fbbox.top : fbbox.bottom, fbbox.left:fbbox.right, :]
+        if resizeTo is not None: # No resizeing was requested
+            scaled.image = cv2.resize(faceOnly, (int(resizeTo[0]), int(resizeTo[1])))    
+        else:
+            scaled.image = copy(faceOnly)
+            resizeTo=_A([faceOnly.shape[0], faceOnly.shape[1]], dtype='f4')
+
         scaled.setLandmarks(self.landmarks())        
-        """ @scaled: DataRow """
+
         scaled.offsetCropped(fbbox.left_top()) # offset the landmarks
-        rx, ry = siz.astype('f4')/faceOnly.shape[:2]
+        rx, ry = resizeTo.astype('f4')/faceOnly.shape[:2]
         scaled.scale(rx, ry)
-        scaled.fbbox=BBox.BBoxFromLTRB(0, 0, int(siz[0]), int(siz[1]))
+        scaled.fbbox=BBox.BBoxFromLTRB(0, 0, int(resizeTo[0]), int(resizeTo[1]))
         return scaled        
         
     def copyMirrored(self):
@@ -557,13 +574,39 @@ class DataRow:
         ret.rightMouth = _A([width-self.leftMouth[0], self.leftMouth[1]])
         return ret
 
+    def transformedDataRow(self, l2):
+        from numpy import array as _A
+        from numpy import dot
+        l1 = self.landmarks().reshape(-1,2)
+        l2 = l2.reshape(-1,2)
+        rows, cols, ch = self.image.shape # original image shape
+        d = DataRow()
+
+        homo, status = cv2.findHomography(l1, l2)    
+        d.image = cv2.warpPerspective(self.image, homo, (rows, cols))
+        # Now tranfrom original landmarks to 
+        l1_t =_A([np.append(v, 1.) for v in l1]) # Pad each row with trailing 1 for translation
+        z  = dot(homo, l1_t.T).T
+        zz =(z[:,:2].T/z[:,2]).T # Normlize z axis to 1 and get only x, y
+        d.setLandmarks(zz.astype('int'))
+        edges=_A([
+            [0      , 0     , 1],
+            [rows   , 0     , 1],
+            [0      , cols  , 1],
+            [rows   , cols  , 1]
+            ])
+        cropBox = dot(homo, edges.T).T
+        crp = int(max(abs(homo[:, 2]))) 
+        cropped = d.copyCroppedByBBox(BBox.BBoxFromLTRB(crp, crp, d.image.shape[0]-crp, d.image.shape[1]-crp))
+        return cropped
+
     @staticmethod
     def dummyDataRow(index):
         ''' Returns a dummy dataRow object to play with
         '''
         return DataRow('/Users/ishay/VanilaCNN/data/train/lfw_5590/Abbas_Kiarostami_0001.jpg',
-                     leftEye=(106.75, 108.25),
-                     rightEye=(143.75,108.75) ,
+                     leftEye = (106.75, 108.25),
+                     rightEye = (143.75,108.75),
                      middle = (131.25, 127.25),
                      leftMouth = (106.25, 155.25),
                      rightMouth =(142.75,155.25)
@@ -573,12 +616,33 @@ class DataRow:
             
 class Predictor:
     ROOT = getGitRepFolder() 
-    
+    NET_INPUT_SIZE = 40 
+
+    @staticmethod
+    def SIZE():
+        return _A([Predictor.NET_INPUT_SIZE, Predictor.NET_INPUT_SIZE])
+
+    def getFeatureVectorFromRow(orign_imae):
+        ''' Assume un proccesed image and predict the feature vector 
+        '''
+        resized = cv2.resize(orign_imae, (Predictor.NET_INPUT_SIZE, Predictor.NET_INPUT_SIZE)).astype('f4')
+        resized -= self.mean
+        resized /= (1.e-6+ self.std)
+        self.net.blobs['data'].data[...] = cv2.split(resized)
+        prediction = self.net.forward()['Dense2'][0]
+        return prediction
+
+
+    def landmarks_0_5(self):
+        ''' return scaled langmarks from 0..40 to -0.5..+0
+        '''
+        return (self.landmarks()/float(Predictor.NET_INPUT_SIZE))-0.5
+
     def preprocess(self, resized, landmarks):
         ret = resized.astype('f4')
         ret -= self.mean
         ret /= (1.e-6+ self.std)
-        return  ret, (landmarks/40.)-0.5
+        return  ret, (landmarks/float(Predictor.NET_INPUT_SIZE))-0.5
     
     def predict(self, resized):
         """
@@ -603,7 +667,6 @@ class Predictor:
         fvector = self.net.forward(start='Conv1', end='ActivationAbs4')['ActivationAbs4']
         return  fvector
 
-        
     def __init__(self, protoTXTPath, weightsPath):
         import caffe
         caffe.set_mode_cpu()
