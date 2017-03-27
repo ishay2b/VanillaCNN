@@ -1,6 +1,6 @@
 import timeit
 import numpy as np
-_A = np.array  # A shortcut to creating arrays in command line 
+_A = np.array  # A shortcut to creating arrays in command line
 import os
 import cv2
 import sys
@@ -49,13 +49,13 @@ INIT_STEPS =['CreateClusterClassifier']
 
 class OnlyDensePredictor():
     ''' predictor input is the 64*3*3 feature vector and output is 5*2 facial landmarks.
-        Currently this is a activation layer with output size 100, cadcaded by another fully connected activation layer with  output size 10        
+        Currently this is a activation layer with output size 100, cadcaded by another fully connected activation layer with  output size 10
     '''
     def __init__(self, clusterIndex, clustersPath=None):
         self.clusterIndex = clusterIndex
         if clustersPath is None:
             clustersPath =CLUSTERS_PATH
-        
+
         import caffe, os
         caffe.set_mode_cpu()
         self.net = caffe.Net(
@@ -91,8 +91,8 @@ def addPythonModuleToEnvironPath():
 
 def writeDictionaryToHD5(dict, outputPath, setTxtFilePATH):
     ''' Create HD5 data set from a dictonary for caffe from given valid feature vectors per clusster
-    if mirror is True, duplicate data by mirroring. 
-    ''' 
+    if mirror is True, duplicate data by mirroring.
+    '''
     import h5py
 
     setTxtFile = open(setTxtFilePATH, 'w')
@@ -104,7 +104,7 @@ def writeDictionaryToHD5(dict, outputPath, setTxtFilePATH):
     setTxtFile.flush()
     setTxtFile.close()
 
-    
+
 '''    STEPS: Download, create train and test pickle, create train and test hd5 clusters, train, select best snap shot          '''
 
 def downloadTrainingSet():
@@ -122,7 +122,7 @@ def downloadTrainingSet():
             print "Done extracting MTFL"
             f.close()
 
-def downloadAFW(): 
+def downloadAFW():
     theurl = 'https://www.ics.uci.edu/~xzhu/face/AFW.zip'
     filename = ROOT+'/AFW.zip'
     if os.path.isfile(filename):
@@ -151,7 +151,7 @@ def downloadAFLW():
             theOpenedFile.close()
         print "Done extracting AFW zip folder"
 
-      
+
 def createTrainingSetPickle():
     from DataRow import *
 
@@ -165,7 +165,7 @@ def createTrainingSetPickle():
     print "Original train:",len(dataRowsMTFL_CSV), "Valid Rows:", len(dataRowsMTFLValid), " No faces at all", R.noFacesAtAll, " Illegal landmarks:", R.outsideLandmarks, " Could not match:", R.couldNotMatch
     with open('trainSetMTFL.pickle','w') as f:
         dump(dataRowsMTFLValid,f)
-    print "Finished dumping to trainSetMTFL.pickle"        
+    print "Finished dumping to trainSetMTFL.pickle"
     dataRowsMTFL_CSV=[]
 
 
@@ -196,14 +196,14 @@ def createClusteredData(dataRows, gmm, predictor):
     '''
     cluster each data row by nearest neighbor, and append the data row with feature vector + cluster index
     Should be called once for train and econd for test data
-    '''    
+    '''
     #Prepend a vector of 64 vectors
     clusters =[[] for i in range(64)]
-    
+
     for i, dataRow in enumerate(dataRows):
         if i%100 ==0: # Comfort print
             print "Getting feature vector of row:",i
-        
+
         dataRow40 = dataRow.copyCroppedByBBox(dataRow.fbbox)
         image, lm_0_5 = predictor.preprocess(dataRow40.image, dataRow40.landmarks())
         dataRow.fvector = predictor.getFeatureVector(image).flatten() # Save the feature vector to original data fow
@@ -220,10 +220,10 @@ def write_clusters_hdb5(clusters, outputName, txtList):
     # Create HD5 train data from clussters
     for i in range(64):
         cluster=clusters[i]
-        
+
         vecs=np.array([dataRow.fvector for dataRow in cluster])
         landmarks=np.array([dataRow.landmarks_0_5() for dataRow in cluster]) # write scaled landmarks -0.5..+0.5 to hdf
-                
+
         clusterPath=os.path.join(CLUSTERS_PATH,str(i))
         if not os.path.isdir(clusterPath):
             os.mkdir(clusterPath)
@@ -254,7 +254,7 @@ def parseLog(logFilePath):
             xresult = regex.search(line)
             if (xresult):
                 xAxis.append(int(xresult.groups(1)[0]))
-                
+
             yresult = regexLos.search(line)
             if (yresult):
                 yAxis.append(float(yresult.groups(1)[0]))
@@ -269,7 +269,7 @@ def parseLog(logFilePath):
 
 def createBest(clustersPath, pathToOrig=ORIG_VANILLA_WEIGHTS):
     '''
-    Assume snapshot intervel is synced with iteration loss plot we can get the best snapshot    
+    Assume snapshot intervel is synced with iteration loss plot we can get the best snapshot
     pathToOrig is needed if the loss only got worse, we use original set, debug mode.
     '''
     import os, shutil
@@ -280,12 +280,12 @@ def createBest(clustersPath, pathToOrig=ORIG_VANILLA_WEIGHTS):
     minIndex=np.argmin(yAxis)
     x,y= xAxis[minIndex], yAxis[minIndex]
 
-    print "Min loss error found at (x,y):", x, y 
+    print "Min loss error found at (x,y):", x, y
     source = os.path.join(clustersPath, 'snap_iter_%d.caffemodel' % x)
     if minIndex==0:
         print "Error always went up!!!. The first initial snapshot was better, using it. Need to know why this happened. Choosing latest"
         files = glob("snap_iter*.caffemodel")
-        files.sort(key=os.path.getmtime)        
+        files.sort(key=os.path.getmtime)
         source = files[0]
 
     target = os.path.join(clustersPath, 'best.caffemodel')
@@ -295,8 +295,8 @@ def createBest(clustersPath, pathToOrig=ORIG_VANILLA_WEIGHTS):
 
 
 def findNearestNeigher(gmm, v):
-    '''return nearest neighbor index for vector v in gmm'''  
-    import numpy as np  
+    '''return nearest neighbor index for vector v in gmm'''
+    import numpy as np
     err=np.sum((gmm-v)**2,axis=1)
     minIndex= np.argmin(err)
     return minIndex
@@ -311,27 +311,27 @@ def trainCluster(clusterIndex, pathToClusters):
     emulateBashSource() # Make sure to load all environ needed in env_vars.sh
 
     prevDir=os.getcwd() # we will change directory and return to this
-    os.chdir(os.path.join(pathToClusters,str(clusterIndex))) 
+    os.chdir(os.path.join(pathToClusters,str(clusterIndex)))
     pathToTrainProto    = os.path.join(pathToClusters,'tweak_train.prototxt')
     pathToWeights   = os.path.join(pathToClusters,'vanillaCNN.caffemodel')
     pathToSolver        = os.path.join(pathToClusters,'tweak_adam_solver.prototxt')
 
-    ''' 
+    '''
     orig_std=sys.stdout
     sys.stdout=open('clusterLog.txt','w')
-    solver = caffe.get_solver(pathToSolver) 
+    solver = caffe.get_solver(pathToSolver)
     net=caffe.Net(pathToTrainProto, pathToWeights, caffe.TRAIN)
 
     solver.solve()
     sys.stdout.close()
     sys.stdout=orig_std
     os.chdir(prevDir)
-    return 
-    ''' 
+    return
+    '''
 
     #Get the caffe.bin exe, Assume to be define in env_vars.sh
     caffeExe=os.environ.get('CAFFE_EXE','/Users/ishay/caffe/distribute/bin/caffe.bin')
-    
+
     cmd=[caffeExe, 'train',
         '--solver', pathToSolver,
         '--weights', pathToWeights
@@ -339,14 +339,14 @@ def trainCluster(clusterIndex, pathToClusters):
 
     print cmd
 
-    #call caffe.bin with the params and redirect both output to clusterLog.txt 
+    #call caffe.bin with the params and redirect both output to clusterLog.txt
     with open('clusterLog.txt', "w") as outfile:
         ret=call(cmd, stdout=outfile, stderr=outfile)
-        
-    #Paarse log, find min error, create a copy of min snapshot weights named best.caffemodel
+
+    #Parse log, find min error, create a copy of min snapshot weights named best.caffemodel
     createBest(os.getcwd())
 
-    # Clean up snap states and model    
+    # Clean up snap states and model
     for snap in glob('snap_iter*'):
         os.remove(snap)
 
@@ -365,9 +365,9 @@ def runTweakTest(gmm, DEBUG=False):
 
     with open('testSetPickle.pickle') as f:
         dataRowsTestValid=load(f)
-        
+
     print "Loaded ",len(dataRowsTestValid), " valid rows from pickle file."
-        
+
     beginTest = timeit.default_timer()
 
     for i, dataRow in enumerate(dataRowsTestValid):
@@ -379,17 +379,17 @@ def runTweakTest(gmm, DEBUG=False):
         vanillaTestError[clusterIndex].add(lm_0_5, vanillaPrediction)
 
         dataRow.prediction = (prediction+0.5)*40.  # Scale -0.5..+0.5 to 0..40
-        
+
         if i%300==0:
             print "run test ",i
             if DEBUG:
                 dataRow.prediction = dataRow.inverseScaleAndOffset(dataRow.prediction) # Scale up to the original image scale
                 dataRow.show(title=str(i))
-            
+
     for i, err in enumerate(testError):
         print i, "Vanilla Error:",vanillaTestError[i], " tweaked Error:", testError[i]
 
-    print "Time diff running tweak test",timeit.default_timer()-beginTest 
+    print "Time diff running tweak test",timeit.default_timer()-beginTest
 
 
 def matrixPlot(vec, title_=''):
@@ -406,5 +406,5 @@ def matrixPlot(vec, title_=''):
                 subplot(rows, cols, z+1)
                 imshow(cv2.cvtColor(vec[z], cv2.COLOR_BGR2RGB))
                 axis("off")
-            z += 1                
+            z += 1
 

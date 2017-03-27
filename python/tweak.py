@@ -1,6 +1,6 @@
 import timeit
 import numpy as np
-_A = np.array  # A shortcut to creating arrays in command line 
+_A = np.array  # A shortcut to creating arrays in command line
 import os
 import cv2
 import sys
@@ -14,27 +14,47 @@ import sys, select, os
 
 #from matplotlib.pylab import *
 FULL_STEPS=[
-'createTrainingSetPickle', 
-'createGMM', 
+'createTrainingSetPickle',
+'createGMM',
 'createTrainClusters',
 'createTestSetPickle',
 'createTestClusters',
 'trainCLusters',
 'runTweakTest']
 
-STEPS=['', 'createGMM']
+STEPS=['augmentClusters']
 #STEPS=['createTrainingSetPickle', 'createTrainClusters','createTestClusters','runTweakTest']
 
-start = timeit.default_timer() # total running time 
+start = timeit.default_timer() # total running time
 
 class Stats():
     ''' empty container to reutrn stats
     '''
-    pass 
+    pass
+
+
+def calculateClusterIndex(dataRows):
+    clusters =[[] for i in range(64)]
+
+    for i, dataRow in enumerate(dataRows):
+        if i%1000 ==0: # Comfort print
+            print "Getting feature vector of row:",i
+
+        dataRowFaceOnly = dataRow.copyCroppedByBBox(dataRow.fbbox)
+        image, lm_0_5 = vanilla_predictor.preprocess(dataRowFaceOnly.image, dataRowFaceOnly.landmarks())
+        dataRow.fvector = vanilla_predictor.getFeatureVector(image).flatten() # Save the feature vector to original data fow
+        dataRow.clusterIndex = findNearestNeigher(gmm, dataRow.fvector) # Save the cluster index to the original data row
+        clusters[dataRow.clusterIndex].append(dataRow)
+
+    dist=[len(c) for c in clusters]
+    #plot(dist); title('Traning clusters number of samples.'); show()
+    print "Original data distribution:", dist
+    return clusters
+
 
 
 # Create the MTFL benchmark
-if 'createTrainingSetPickle' in STEPS:  
+if 'createTrainingSetPickle' in STEPS:
     createTrainingSetPickle()
 
 if 'createTestSetPickle' in STEPS:
@@ -47,66 +67,68 @@ if 'createTestSetPickle' in STEPS:
     with open('testSetPickle.pickle','w') as f:
         dump(dataRowsTestValid, f)
 
-#Load Vanilla weights 
+#Load Vanilla weights
 vanilla_predictor = Predictor(protoTXTPath=PATH_TO_DEPLOY_TXT, weightsPath=PATH_TO_WEIGHTS)
 if 'createGMM' in STEPS:
     with open('trainSetMTFL.pickle','r') as f:
         dataRows = load(f)
     gmm=createGMM(vanilla_predictor, dataRows)
     with open('gmm.pickle','w') as f:
-        dump(gmm, f)    
+        dump(gmm, f)
 
 #Load GMM
 with open('gmm.pickle') as f:
     gmm=load(f)
 
 
-if 'calculateClusterIndex' in STEPS:
-    with open('trainSetMTFL.pickle', 'r') as f: # WARNING: USING TEST FOR DEBUG ONLY
+if 'calculateClusterIndexTest' in STEPS: # For debug only, not needed to training
+    with open('testSetMTFL.pickle', 'r') as f:
+        dataRows = load(f)
+    print "Finished loading %d rows from test data" % len(dataRows)
+    train_clusters = calculateClusterIndex(dataRows)
+    with open('testSetMTFL.pickle','w') as f:
+        dump(dataRows,f)
+    print "Finished resaving train data with feature vectors+cluster index as: trainSetMTFL.pickle"
+
+
+if 'calculateClusterIndexTrain' in STEPS:
+    with open('trainSetMTFL.pickle', 'r') as f:
         dataRows = load(f)
     print "Finished loading %d rows from train data" % len(dataRows)
-
-    clusters =[[] for i in range(64)]
-    
-    for i, dataRow in enumerate(dataRows):
-        if i%1000 ==0: # Comfort print
-            print "Getting feature vector of row:",i
-        
-        dataRowFaceOnly = dataRow.copyCroppedByBBox(dataRow.fbbox)
-        image, lm_0_5 = vanilla_predictor.preprocess(dataRowFaceOnly.image, dataRowFaceOnly.landmarks())
-        dataRow.fvector = vanilla_predictor.getFeatureVector(image).flatten() # Save the feature vector to original data fow
-        dataRow.clusterIndex = findNearestNeigher(gmm, dataRow.fvector) # Save the cluster index to the original data row
-        clusters[dataRow.clusterIndex].append(dataRow)
-
-    dist=[len(c) for c in clusters]
-    #plot(dist); title('Traning clusters number of samples.'); show()
-    print "Original data distribution:", dist
-
+    train_clusters = calculateClusterIndex(dataRows)
     with open('trainSetMTFL.pickle','w') as f:
         dump(dataRows,f)
     print "Finished resaving train data with feature vectors+cluster index as: trainSetMTFL.pickle"
 
 if 'augmentClusters' in STEPS:
-    with open('trainSetMTFL.pickle', 'r') as f: 
-        dataRows = load(f)
+    DEBUG = True
+
+    if DEBUG:
+        with open('testSetMTFL.pickle', 'r') as f:
+            dataRows = load(f)
+    else:
+        with open('trainSetMTFL.pickle', 'r') as f:
+            dataRows = load(f)
 
     clusters = [[] for i in range(64)]
     stats=Stats()
     stats.WRONG_CLUSTER =0
-    stats.AUGMENTET_SUM = 0 
-    stats.LANDMARKS_OUTOF_RANGE = 0 
+    stats.AUGMENTET_SUM = 0
+    stats.LANDMARKS_OUTOF_RANGE = 0
 
     for dataRow in dataRows:
         clusters[dataRow.clusterIndex].append(dataRow)
 
     try:
         for ci, cluster in enumerate(clusters):
-            break
             for i in range(len(cluster)-1):
                 for j in range (i+1, len(cluster)):
                     A = cluster[i]
                     B = cluster[j]
                     A_T = A.transformedDataRow(B.landmarks()) # Might return a small cropped image due to rotatin
+                    if DEBUG:
+                        if (len(raw_input("Press Enter to continue...")))>1:
+                            raise KeyboardInterrupt, "User finished"
                     if A_T is None:
                         #Error - landmarks go out of range
                         stats.LANDMARKS_OUTOF_RANGE += 1
@@ -127,7 +149,7 @@ if 'augmentClusters' in STEPS:
         print "KeyboardInterrupt"
 
     hist_aug = [len(c) for c in clusters]
-    print "Augmentes cluster sizes:", hist_aug
+    print "clusters sizes pre augmentation:", hist_aug
 
     print vars(stats)
     write_clusters_hdb5(
@@ -144,7 +166,7 @@ if 'createTestClusters' in STEPS:
         dataRows=load(f)
     print "Loaded %d valid rows" % len(dataRows)
     testClusters = createClusteredData(
-        dataRows=dataRows, 
+        dataRows=dataRows,
         gmm=gmm,
         predictor=vanilla_predictor)
     print "Finished clustering original test data"
@@ -156,7 +178,7 @@ if 'createTestClusters' in STEPS:
     print "Finished creating test hd5"
 
 if 'trainClusters' in STEPS:
-    for i in range(64):
+    for i in range(2):
         trainCluster(i, CLUSTERS_PATH)
 
 DEBUG=True
@@ -175,7 +197,7 @@ if 'viewCluster' in STEPS:
     lnmrs_05 = f5[f5.keys()[1]]
     print imgs.shape
 
-print "Running time:", timeit.default_timer() - start 
+print "Running time:", timeit.default_timer() - start
 
 ''' STEPS
 if __name__=='__main__':
