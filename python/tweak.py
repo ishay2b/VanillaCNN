@@ -5,6 +5,7 @@ import os
 import cv2
 import sys
 from pickle import load, dump
+from timeit import default_timer
 
 #Import helper functions
 from helpers import *
@@ -38,7 +39,7 @@ def calculateClusterIndex(dataRows):
 
     for i, dataRow in enumerate(dataRows):
         if i%1000 ==0: # Comfort print
-            print "Getting feature vector of row:",i
+            print ("Getting feature vector of row:%d"%i)
 
         dataRowFaceOnly = dataRow.copyCroppedByBBox(dataRow.fbbox)
         image, lm_0_5 = vanilla_predictor.preprocess(dataRowFaceOnly.image, dataRowFaceOnly.landmarks())
@@ -48,7 +49,7 @@ def calculateClusterIndex(dataRows):
 
     dist=[len(c) for c in clusters]
     #plot(dist); title('Traning clusters number of samples.'); show()
-    print "Original data distribution:", dist
+    print ("Original data distribution:"+str(dist))
     return clusters
 
 
@@ -58,12 +59,12 @@ if 'createTrainingSetPickle' in STEPS:
     createTrainingSetPickle()
 
 if 'createTestSetPickle' in STEPS:
-    print "Creating test set....."
+    print ("Creating test set.....")
     dataRowsTest_CSV  = createDataRowsFromCSV(CSV_TEST , DataRow.DataRowFromNameBoxInterlaved, DATA_PATH)
-    print "Finished reading %d rows from test" % len(dataRowsTest_CSV)
+    print ("Finished reading %d rows from test"%len(dataRowsTest_CSV))
     dataRowsTestValid,R = getValidWithBBox(dataRowsTest_CSV, resizeTo=None)
 
-    print "Original test:",len(dataRowsTest_CSV), "Valid Rows:", len(dataRowsTestValid), " noFacesAtAll", R.noFacesAtAll, " outside:", R.outsideLandmarks, " couldNotMatch:", R.couldNotMatch
+    print ("Original test:",len(dataRowsTest_CSV), "Valid Rows:", len(dataRowsTestValid), " noFacesAtAll", R.noFacesAtAll, " outside:", R.outsideLandmarks, " couldNotMatch:", R.couldNotMatch)
     with open('testSetPickle.pickle','w') as f:
         dump(dataRowsTestValid, f)
 
@@ -77,28 +78,29 @@ if 'createGMM' in STEPS:
         dump(gmm, f)
 
 #Load GMM
+start_time = default_timer()
 with open('gmm.pickle') as f:
     gmm=load(f)
-
+print ("Finished loading gmm.pickle in %d seconds"%(default_timer()-start_time))
 
 if 'calculateClusterIndexTest' in STEPS: # For debug only, not needed to training
     with open('testSetMTFL.pickle', 'r') as f:
         dataRows = load(f)
-    print "Finished loading %d rows from test data" % len(dataRows)
+    print ("Finished loading %d rows from test data" % len(dataRows))
     train_clusters = calculateClusterIndex(dataRows)
     with open('testSetMTFL.pickle','w') as f:
         dump(dataRows,f)
-    print "Finished resaving train data with feature vectors+cluster index as: trainSetMTFL.pickle"
+    print ("Finished resaving train data with feature vectors+cluster index as: trainSetMTFL.pickle")
 
 
 if 'calculateClusterIndexTrain' in STEPS:
     with open('trainSetMTFL.pickle', 'r') as f:
         dataRows = load(f)
-    print "Finished loading %d rows from train data" % len(dataRows)
+    print ("Finished loading %d rows from train data" % len(dataRows))
     train_clusters = calculateClusterIndex(dataRows)
     with open('trainSetMTFL.pickle','w') as f:
         dump(dataRows,f)
-    print "Finished resaving train data with feature vectors+cluster index as: trainSetMTFL.pickle"
+    print ("Finished resaving train data with feature vectors+cluster index as: trainSetMTFL.pickle")
 
 if 'augmentClusters' in STEPS:
     DEBUG = True
@@ -128,7 +130,7 @@ if 'augmentClusters' in STEPS:
                     A_T = A.transformedDataRow(B.landmarks()) # Might return a small cropped image due to rotatin
                     if DEBUG:
                         if (len(raw_input("Press Enter to continue...")))>1:
-                            raise KeyboardInterrupt, "User finished"
+                            raise (KeyboardInterrupt, "User finished")
                     if A_T is None:
                         #Error - landmarks go out of range
                         stats.LANDMARKS_OUTOF_RANGE += 1
@@ -141,41 +143,41 @@ if 'augmentClusters' in STEPS:
                         if A_T.clusterIndex != ci:
                             # Error - new image does not belong to the same cluster, therfor rejectet.
                             stats.WRONG_CLUSTER += 1
-                            print vars(stats)
+                            print (vars(stats))
                         else:
                             stats.AUGMENTET_SUM += 1
                             clusters[ci].append(A_T)
     except KeyboardInterrupt:
-        print "KeyboardInterrupt"
+        print ("KeyboardInterrupt")
 
     hist_aug = [len(c) for c in clusters]
-    print "clusters sizes pre augmentation:", hist_aug
+    print ("clusters sizes pre augmentation:"+str(hist_aug))
 
-    print vars(stats)
+    print ("Stats:"+str(vars(stats)))
     write_clusters_hdb5(
         clusters=clusters,
         outputName='train.hd5',
         txtList='train.list.txt')
 
-    print "Finished writing augmented training data hd5"
+    print ("Finished writing augmented training data hd5")
 
 
 if 'createTestClusters' in STEPS:
-    print "Creating HD5 test data for clusters. Loading..."
+    print ("Creating HD5 test data for clusters. Loading...")
     with open('testSetPickle.pickle','r') as f:
         dataRows=load(f)
-    print "Loaded %d valid rows" % len(dataRows)
+    print ("Loaded %d valid rows"%len(dataRows))
     testClusters = createClusteredData(
         dataRows=dataRows,
         gmm=gmm,
         predictor=vanilla_predictor)
-    print "Finished clustering original test data"
+    print ("Finished clustering original test data")
     write_clusters_hdb5(
         testVlusters,
         txtList='test.list.txt',
         outputName='test.hd5')
 
-    print "Finished creating test hd5"
+    print ("Finished creating test hd5")
 
 if 'trainClusters' in STEPS:
     for i in range(2):
@@ -192,12 +194,13 @@ if 'viewCluster' in STEPS:
     clusterTrainPath= os.path.join(clusterPath, 'train.hd5')
     import h5py
     f5 = h5py.File(clusterTrainPath)
-    print "keys:", f5.keys()
+    print ("keys:"+str(f5.keys()))
     imgs = f5[f5.keys()[0]]
     lnmrs_05 = f5[f5.keys()[1]]
-    print imgs.shape
+    print (imgs.shape)
 
-print "Running time:", timeit.default_timer() - start
+print ("Running time: %d seconds"%(default_timer() - start))
+
 
 ''' STEPS
 if __name__=='__main__':
