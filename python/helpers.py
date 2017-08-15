@@ -13,7 +13,7 @@ except:
 
 def getGitRepFolder():
     from subprocess import Popen, PIPE
-    return Popen(['git', 'rev-parse', '--show-toplevel'], stdout=PIPE).communicate()[0].rstrip()
+    return Popen(['git', 'rev-parse', '--show-toplevel'], stdout=PIPE).communicate()[0].rstrip().decode("utf-8")
 
 
 #Consts
